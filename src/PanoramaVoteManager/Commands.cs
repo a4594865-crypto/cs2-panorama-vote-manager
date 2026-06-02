@@ -3,16 +3,14 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Extensions;
-using CounterStrikeSharp.API.Modules.Utils;
 using PanoramaVoteManagerAPI.Vote;
-using CounterStrikeSharp.API.Modules.Timers;
 
 namespace PanoramaVoteManager
 {
     public partial class PanoramaVoteManager
     {
         // =======================================================
-        // 🎮 玩家指令：.vt <地圖名> 或 !vt <地圖名>
+        // 🎮 玩家專用聊天室指令：.vt <地圖名> 或 !vt <地圖名>
         // =======================================================
         [ConsoleCommand("css_vt", "玩家發起熱身賽指定地圖投票")]
         [CommandHelper(minArgs: 1, usage: "<地圖名稱>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
@@ -20,7 +18,7 @@ namespace PanoramaVoteManager
         {
             if (player == null || !player.IsValid) return;
 
-            // 1. 檢查是否為熱身賽
+            // 1. 安全審查：確保目前是熱身賽（Warmup）
             var gameRulesEnt = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>("cs_gamerules").SingleOrDefault();
             bool isWarmup = gameRulesEnt?.As<CCSGameRulesProxy>()?.GameRules?.WarmupPeriod == true;
 
@@ -37,7 +35,7 @@ namespace PanoramaVoteManager
                 return;
             }
 
-            // 3. 獲取玩家輸入的地圖名稱
+            // 3. 獲取玩家輸入的地圖名稱（轉小寫防呆）
             string targetMap = command.GetArg(1).Trim().ToLower();
 
             if (string.IsNullOrEmpty(targetMap) || targetMap.Length < 3)
@@ -46,7 +44,7 @@ namespace PanoramaVoteManager
                 return;
             }
 
-            // 4. 取得全伺服器所有有效玩家的清單
+            // 4. 撈出全伺服器所有有效玩家的 UserId（用來讓兩隊大合體投票）
             List<int> allPlayerIds = [];
             foreach (var p in Utilities.GetPlayers())
             {
@@ -58,32 +56,38 @@ namespace PanoramaVoteManager
 
             if (allPlayerIds.Count == 0) return;
 
-            // 5. 設定官方 F1/F2 投票顯示文字
+            // 5. 定義官方 F1/F2 原生 UI 畫面上要顯示的提示文字
             var voteTexts = new Dictionary<string, string>
             {
                 { "en", $"Change map to: {targetMap}?" },
                 { "zh", $"是否同意將地圖更換為：{targetMap} ？" }
             };
 
-            // 6. 塞入投票佇列，並綁定「投票通過後 3 秒自動執行換圖」
+            // 6. 塞入官方原生的 Vote 佇列結構中
             _votes.Add(new Vote(
-                "#SFUI_vote_passed_changelevel",
+                "#SFUI_vote_passed_changelevel", // 沿用官方原生換圖綠字與音效
                 voteTexts,
-                15, // 投票框顯示 15 秒
-                -1, // 跨隊伍聯合計票
+                15, // 官方黑框在畫面上強制彈出 15 秒
+                -1, // 核心！-1 代表打破隊伍限制，CT 和 TS 票數合併計算
                 allPlayerIds,
-                player.UserId ?? 99,
+                (int)(player.UserId ?? 99), // 發起人
                 (v, success) => 
                 {
+                    // 💡 當投票時間結束，且全服按 F1 同意過半時
                     if (success)
                     {
                         Server.PrintToChatAll($" \x01[\x04投票\x01] \x05換圖投票通過！伺服器將在 3 秒後切換至地圖: \x04{targetMap}");
                         
-                        // 💡【.NET 10 強制轉型修復】：直接使用 (Action) 關鍵字對 Lambda 表達式進行顯式強轉
-                        // 並且完全遵循原本原作者在 PanoramaVoteManager_2.cs 裡的雙參數原生多載寫法[cite: 2]
-                        AddTimer(3.0f, (Action)(() => {
-                            Server.ExecuteCommand($"changelevel {targetMap}");
-                        }));
+                        // 🚀【.NET 10 絕對通用解法】：徹底捨棄衝突的 AddTimer 簡寫
+                        // 直接用 Task 在背景倒數 3 秒，時間到用 NextFrame 安全回歸主執行緒換圖！
+                        Task.Run(async () =>
+                        {
+                            await Task.Delay(3000);
+                            Server.NextFrame(() =>
+                            {
+                                Server.ExecuteCommand($"changelevel {targetMap}");
+                            });
+                        });
                     }
                     else
                     {
@@ -92,16 +96,16 @@ namespace PanoramaVoteManager
                 }
             ));
 
-            // 全服聊天室大廣播
+            // 全服聊天室通知是誰點火發起
             Server.PrintToChatAll($" \x01[\x04投票\x01] 玩家 \x03{player.PlayerName}\x01 發起了換圖投票 ➡️ \x04{targetMap}\x01！");
 
-            // 啟動投票
+            // 7. 呼叫 PanoramaVoteManager.cs 原生的啟動方法
             StartVote();
         }
 
-        // ==========================================
-        // ⚙️ 原本的後台測試指令（保持不變）
-        // ==========================================
+        // =======================================================
+        // ⚙️ 官方原生自帶的後台重載/測試指令（完全保留，一字未改）
+        // =======================================================
         [ConsoleCommand("panoramavotemanager", "PanoramaVoteManager admin commands")]
         [CommandHelper(whoCanExecute: CommandUsage.SERVER_ONLY, minArgs: 1, usage: "<command>")]
         public void CommandMapVote(CCSPlayerController player, CommandInfo command)
