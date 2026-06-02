@@ -5,6 +5,7 @@ using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Extensions;
 using CounterStrikeSharp.API.Modules.Utils;
 using PanoramaVoteManagerAPI.Vote;
+using CounterStrikeSharp.API.Modules.Timers;
 
 namespace PanoramaVoteManager
 {
@@ -78,10 +79,11 @@ namespace PanoramaVoteManager
                     {
                         Server.PrintToChatAll($" \x01[\x04投票\x01] \x05換圖投票通過！伺服器將在 3 秒後切換至地圖: \x04{targetMap}");
                         
-                        // 💡【修正此處】：明確指定呼叫 BasePlugin 的 AddTimer 方法，並確保參數對齊
-                        _ = this.AddTimer(3.0f, () => {
+                        // 💡【.NET 10 強制轉型修復】：直接使用 (Action) 關鍵字對 Lambda 表達式進行顯式強轉
+                        // 並且完全遵循原本原作者在 PanoramaVoteManager_2.cs 裡的雙參數原生多載寫法[cite: 2]
+                        AddTimer(3.0f, (Action)(() => {
                             Server.ExecuteCommand($"changelevel {targetMap}");
-                        });
+                        }));
                     }
                     else
                     {
