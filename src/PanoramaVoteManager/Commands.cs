@@ -3,6 +3,7 @@ using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Extensions;
+using PanoramaVoteManagerAPI.Vote;
 
 namespace PanoramaVoteManager
 {
@@ -17,7 +18,7 @@ namespace PanoramaVoteManager
         {
             if (player == null || !player.IsValid) return;
 
-            // 1. 安全審查：確保目前是熱身賽（Warmup）
+            // 1. 安全審查：確保目前是熱身賽（Warmup Period）
             var gameRulesEnt = Utilities.FindAllEntitiesByDesignerName<CBaseEntity>("cs_gamerules").SingleOrDefault();
             bool isWarmup = gameRulesEnt?.As<CCSGameRulesProxy>()?.GameRules?.WarmupPeriod == true;
 
@@ -34,7 +35,7 @@ namespace PanoramaVoteManager
                 return;
             }
 
-            // 3. 獲取玩家輸入的地圖名稱並轉小寫防呆
+            // 3. 獲取玩家輸入的地圖名稱並轉小寫
             string targetMap = command.GetArg(1).Trim().ToLower();
 
             if (string.IsNullOrEmpty(targetMap) || targetMap.Length < 3)
@@ -43,7 +44,7 @@ namespace PanoramaVoteManager
                 return;
             }
 
-            // 4. 撈出全伺服器所有有效玩家的 UserId（打破隊伍限制合併計票）
+            // 4. 撈出全伺服器所有有效玩家的 UserId（用於打破兩隊限制的大合體投票）
             List<int> allPlayerIds = [];
             foreach (var p in Utilities.GetPlayers())
             {
@@ -62,53 +63,45 @@ namespace PanoramaVoteManager
                 { "zh", $"是否同意將地圖更換為：{targetMap} ？" }
             };
 
-            // 6. 💡【徹底修復：完全符合官方原生的 6 個參數規格】
-            // 移除了導致編譯器瞎眼報錯的第 7 個 Callback 參數
-            var myMapVote = new PanoramaVoteManagerAPI.Vote.Vote(
-                "#SFUI_vote_passed_changelevel", 
+            // 6. 塞入官方原生的 Vote 佇列結構
+            // 💡【.NET 10 明確型別鎖定修復】：在第 74 行明確指定 (Vote v, bool success) 的強型別
+            // 彻底杜绝编译器因为参数模糊而胡乱对齐到 float 方法的死穴！
+            _votes.Add(new Vote(
+                "#SFUI_vote_passed_changelevel",
                 voteTexts,
                 15, // 官方黑框顯示 15 秒供玩家按鍵
-                -1, // -1 代表打破隊伍限制，兩隊一起合併計票
+                -1, // -1 代表打破隊伍限制，CT 和 TS 票數合併計算
                 allPlayerIds,
-                (int)(player.UserId ?? 99)
-            );
-
-            _votes.Add(myMapVote);
-
-            // 全服聊天室通知是誰點火發起
-            Server.PrintToChatAll($" \x01[\x04投票\x01] 玩家 \x03{player.PlayerName}\x01 發起了換圖投票 ➡️ \x04{targetMap}\x01！");
-
-            // 7. 啟動這款插件原生的投票功能
-            StartVote();
-
-            // 🚀【後台同步監聽計票】：
-            // 既然不能把邏輯寫在 Vote 的參數裡，我們直接啟動背景工作延遲 16 秒（15秒投票 + 1秒緩衝時間）
-            // 時間一到，我們直接從剛才建立的 myMapVote 物件裡撈出按 F1 和 F2 的最終計票結果！
-            Task.Run(async () =>
-            {
-                await Task.Delay(16000); // 延遲 16000 毫秒 (16秒)
-                Server.NextFrame(() =>
+                (int)(player.UserId ?? 99), // 發起人
+                (Vote v, bool success) => 
                 {
-                    // 如果按 F1 (Yes) 的票數大於按 F2 (No) 的票數，代表投票通過！
-                    if (myMapVote.YesVotes > myMapVote.NoVotes)
+                    // 當投票時間結束，且全服按 F1 同意過半成功觸發 Callback 時
+                    if (success)
                     {
                         Server.PrintToChatAll($" \x01[\x04投票\x01] \x05換圖投票通過！伺服器將在 3 秒後切換至地圖: \x04{targetMap}");
                         
-                        // 倒數 3 秒執行控制台換圖指令
+                        // 使用最穩定的非同步背景倒數 3 秒，時間到用 NextFrame 安全回歸主線程執行換圖
                         Task.Run(async () =>
                         {
                             await Task.Delay(3000);
-                            Server.NextFrame(() => {
+                            Server.NextFrame(() =>
+                            {
                                 Server.ExecuteCommand($"changelevel {targetMap}");
                             });
                         });
                     }
                     else
                     {
-                        Server.PrintToChatAll(" \x01[\x04投票\x01] \x02換圖投票未通過（同意票不足或平票）或已被取消。");
+                        Server.PrintToChatAll(" \x01[\x04投票\x01] \x02換圖投票未通過或已被取消。");
                     }
-                });
-            });
+                }
+            ));
+
+            // 全服聊天室大廣播通知點火發起
+            Server.PrintToChatAll($" \x01[\x04投票\x01] 玩家 \x03{player.PlayerName}\x01 發起了換圖投票 ➡️ \x04{targetMap}\x01！");
+
+            // 7. 呼叫 PanoramaVoteManager.cs 原始碼自帶的原生啟動方法
+            StartVote();
         }
 
         // =======================================================
@@ -133,7 +126,7 @@ namespace PanoramaVoteManager
                     }
                     Random random = new();
                     int randomTime = random.Next(3, 13);
-                    _votes.Add(new PanoramaVoteManagerAPI.Vote.Vote(
+                    _votes.Add(new Vote(
                         "#SFUI_vote_passed_changelevel",
                         new Dictionary<string, string> {
                             {"en", $"This is my cool vote -> {randomTime}"},
