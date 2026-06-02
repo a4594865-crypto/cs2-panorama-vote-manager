@@ -11,7 +11,7 @@ namespace PanoramaVoteManager
     public partial class PanoramaVoteManager
     {
         // =======================================================
-        // 🎮 玩家指令改為：.vt <地圖名> 或 !vt <地圖名>
+        // 🎮 玩家指令：.vt <地圖名> 或 !vt <地圖名>
         // =======================================================
         [ConsoleCommand("css_vt", "玩家發起熱身賽指定地圖投票")]
         [CommandHelper(minArgs: 1, usage: "<地圖名稱>", whoCanExecute: CommandUsage.CLIENT_ONLY)]
@@ -45,7 +45,7 @@ namespace PanoramaVoteManager
                 return;
             }
 
-            // 4. 取得全伺服器所有有效玩家的清單 (過濾掉機器人)
+            // 4. 取得全伺服器所有有效玩家的清單
             List<int> allPlayerIds = [];
             foreach (var p in Utilities.GetPlayers())
             {
@@ -57,7 +57,7 @@ namespace PanoramaVoteManager
 
             if (allPlayerIds.Count == 0) return;
 
-            // 5. 設定官方 F1/F2 投票黑框內要顯示的中文文字
+            // 5. 設定官方 F1/F2 投票顯示文字
             var voteTexts = new Dictionary<string, string>
             {
                 { "en", $"Change map to: {targetMap}?" },
@@ -66,21 +66,20 @@ namespace PanoramaVoteManager
 
             // 6. 塞入投票佇列，並綁定「投票通過後 3 秒自動執行換圖」
             _votes.Add(new Vote(
-                "#SFUI_vote_passed_changelevel", // 沿用官方原生換圖綠字提示與音效
+                "#SFUI_vote_passed_changelevel",
                 voteTexts,
-                15, // 投票框顯示 15 秒供玩家按鍵
-                -1, // 核心！-1 代表打破 CT/TS 限制，兩隊一起合併計票
+                15, // 投票框顯示 15 秒
+                -1, // 跨隊伍聯合計票
                 allPlayerIds,
                 player.UserId ?? 99,
                 (v, success) => 
                 {
-                    // 當投票結束且成功通過時執行
                     if (success)
                     {
                         Server.PrintToChatAll($" \x01[\x04投票\x01] \x05換圖投票通過！伺服器將在 3 秒後切換至地圖: \x04{targetMap}");
                         
-                        // 延遲 3 秒執行控制台換圖
-                        AddTimer(3.0f, () => {
+                        // 💡【修正此處】：明確指定呼叫 BasePlugin 的 AddTimer 方法，並確保參數對齊
+                        _ = this.AddTimer(3.0f, () => {
                             Server.ExecuteCommand($"changelevel {targetMap}");
                         });
                     }
@@ -99,7 +98,7 @@ namespace PanoramaVoteManager
         }
 
         // ==========================================
-        // ⚙️ 原本的後台管理員/主機測試指令（保持不變）
+        // ⚙️ 原本的後台測試指令（保持不變）
         // ==========================================
         [ConsoleCommand("panoramavotemanager", "PanoramaVoteManager admin commands")]
         [CommandHelper(whoCanExecute: CommandUsage.SERVER_ONLY, minArgs: 1, usage: "<command>")]
